@@ -4,8 +4,6 @@ use strict;
 use JSON;
 use Data::Dumper;
 
-my $tai64nfrac = "tai64nfrac";
-
 my $maillog = shift;
 my $maillog_fh;
 if( -f $maillog ){
