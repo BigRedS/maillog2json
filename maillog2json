@@ -2,56 +2,61 @@
 
 use strict;
 use JSON;
-
 use Data::Dumper;
 
+my $tai64nfrac = "tai64nfrac";
+
 my $maillog = shift;
+my $maillog_fh;
+if( -f $maillog ){
+	open ($maillog_fh, "<", $maillog) or die("Failed to open maillog '$maillog' for reading : $!");
+}else{
+	$maillog_fh = \*STDIN;
+}
 
-
-my $log_data = qmail_parse_log($maillog);
-
+my $log_data = qmail_parse_log($maillog_fh);
 my $json = encode_json($log_data);
 
 print $json;
 
 
 sub qmail_parse_log{
-	my $params = @_;
+
+	my $fh = shift;
 
 	my $log_data;
 	my %delivery_to_message;
 	my %message_to_delivery;
 	my %messages;
 
-	open(my $fh, "<", $maillog) or die "Failed to open mail log '$maillog' for reading :$!";
 	while(my $line = readline($fh)){
 		chomp($line);
-		if($line =~ m/qmail: (\d+).\d+ new msg (\d+)$/){
-			$messages{$2}->{timestamp_start} = $1;
-			$messages{$2}->{message_id} = $2;
-		}elsif($line =~ m/qmail: \d+.\d+ info msg (\d+): bytes (\d+) from <([^\>]+> qp \d+ uid (\d+))$/){
-			$messages{$1}->{size} = $2;
-			$messages{$1}->{from} = $3;
-			$messages{$1}->{uid} = $4;
-		}elsif($line =~ m/qmail: (\d+).\d+ starting delivery (\d+): msg (\d+) to (\S+) (\S+)$/){
+		if($line =~ m/^(qmail: )?(\d{10}).\d{9} new msg (\d+)$/){
+			$messages{$2}->{timestamp_start} = $2;
+			$messages{$2}->{message_id} = $3;
+		}elsif($line =~ m/^(qmail: )?\d{10}.\d{9} info msg (\d+): bytes (\d+) from <([^\>]+)> qp \d+ uid (\d+)$/){
+			$messages{$2}->{size} = $3;
+			$messages{$2}->{from} = $4;
+			$messages{$2}->{uid} = $5;
+		}elsif($line =~ m/^(qmail: )?(\d{10}).\d{9} starting delivery (\d+): msg (\d+) to (\S+) (\S+)$/){
 			# delivery_to_message{delivery_id} = $message_id
-			$delivery_to_message{$2} = $3;
+			$delivery_to_message{$3} = $4;
 			# $messages_to_delivery{message_id} = (delivery_id_1, delivery_id_2, etc.)
-			push(@{$message_to_delivery{$3}}, $2);
-			$messages{$3}->{deliveries}->{$2}->{delivery_id} = $1;
-			$messages{$3}->{deliveries}->{$2}->{timestamp_delivery} = $1;
-			$messages{$3}->{deliveries}->{$2}->{remote_or_local} = $4;
-			$messages{$3}->{deliveries}->{$2}->{to} = $5;
-		}elsif($line =~ m/qmail: (\d+).\d+ delivery (\d+): (\S+): (.+)$/){
-			my $message_id = $delivery_to_message{$2};
-			$messages{$message_id}->{deliveries}->{$2}->{smtp_status} = $3;
-			$messages{$message_id}->{deliveries}->{$2}->{smtp_status_message} = $4;
-		}elsif($line =~ m/qmail: (\d+).\d+ end msg (\d+)$/){
-			$messages{$2}->{timestamp_end} = $1;
+			push(@{$message_to_delivery{$4}}, $3);
+			$messages{$4}->{deliveries}->{$3}->{delivery_id} = $2;
+			$messages{$4}->{deliveries}->{$3}->{timestamp_delivery} = $2;
+			$messages{$4}->{deliveries}->{$3}->{remote_or_local} = $5;
+			$messages{$4}->{deliveries}->{$3}->{to} = $6;
+		}elsif($line =~ m/(qmail: )?(\d{10}).\d{9} delivery (\d+): (\S+): (.+)$/){
+			my $message_id = $delivery_to_message{$3};
+			$messages{$message_id}->{deliveries}->{$3}->{smtp_status} = $4;
+			$messages{$message_id}->{deliveries}->{$3}->{smtp_status_message} = $5;
+		}elsif($line =~ m/(qmail: )?(\d{10}).\d{9} end msg (\d+)$/){
+			$messages{$2}->{timestamp_end} = $2;
 			foreach my $delivery_id (keys(%message_to_delivery)){
 				delete($delivery_to_message{$delivery_id});
 			}
-			delete($message_to_delivery{$2});
+			delete($message_to_delivery{$3});
 		}
 	}
 
