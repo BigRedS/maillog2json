@@ -3,8 +3,22 @@
 use strict;
 use JSON;
 use Data::Dumper;
+use Getopt::Long;
+
+my $help = undef;
+
+GetOptions (
+	"help|h" => \$help,
+) or die("Error in command line arguments\n");
+usage_and_exit() if $help;
 
 my $maillog = shift;
+
+if (!$maillog && -t STDIN){
+	print STDERR "No maillog provided, and nothing on stdin\n";
+	usage_and_exit();
+}
+
 my $maillog_fh;
 if( -f $maillog ){
 	open ($maillog_fh, "<", $maillog) or die("Failed to open maillog '$maillog' for reading : $!");
@@ -73,3 +87,24 @@ sub qmail_parse_log{
 	return ($log_data);
 }
 
+sub usage_and_exit{
+print <<EOF;
+
+maillog2json - converts various forms of maillog into a standard json structure.
+
+USAGE:
+
+   maillog2json /var/log/maillog
+   cat /var/log/maillog | maillog2json
+   cat qmail_log | tai64nfraction | mailllog2json
+
+Either cat the file on stdin or supply it as an argument. For Qmail logfiles using the
+tai64n timestamp, pipe them through tai64nfraction first.
+
+Soon there will be something with which to read the JSON, until then use jq:
+
+https://stedolan.github.io/jq/
+
+EOF
+exit;
+}
