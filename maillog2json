@@ -4,32 +4,122 @@ use strict;
 use JSON;
 use Data::Dumper;
 use Getopt::Long;
+#use Date::Time libdatetime-perl
 
 my $help = undef;
+my $json_pretty = undef;
+my $log_type = undef;
+my $date_format = '%b %d %T';
+# number of whitespace-separated bits of the date:
+my $date_elements = 3;
+
 
 GetOptions (
 	"help|h" => \$help,
+	"log-type|t" => \$log_type,
+	"pretty" => \$json_pretty,
+	"date-format" => \$date_format,
+	"num-date-elements" => \$date_elements,
 ) or die("Error in command line arguments\n");
 usage_and_exit() if $help;
 
-my $maillog = shift;
 
-if (!$maillog && -t STDIN){
+my $maillog = shift;
+my $maillog_fh;
+if( $maillog && -f $maillog ){
+	open ($maillog_fh, "<", $maillog) or die("Failed to open maillog '$maillog' for reading : $!");
+}elsif(! -t STDIN ){
+	$maillog_fh = \*STDIN;
+}else{
 	print STDERR "No maillog provided, and nothing on stdin\n";
 	usage_and_exit();
 }
 
-my $maillog_fh;
-if( -f $maillog ){
-	open ($maillog_fh, "<", $maillog) or die("Failed to open maillog '$maillog' for reading : $!");
+$log_type = get_log_type($maillog_fh) unless $log_type;
+
+my $log_data;
+if($log_type eq 'postfix'){
+	$log_data = postfix_parse_log($maillog_fh);
+}elsif($log_type eq 'qmail'){
+	$log_data = qmail_parse_log($maillog_fh);
 }else{
-	$maillog_fh = \*STDIN;
+	print "ERROR: Failed to guess log type";
 }
 
-my $log_data = qmail_parse_log($maillog_fh);
-my $json = encode_json($log_data);
+my $json = JSON->new->allow_nonref;
 
-print $json;
+if($json_pretty){
+	print $json->pretty->encode($log_data);
+}else{
+	print $json->encode($log_data);
+}
+
+# # #
+# #
+#
+
+sub postfix_parse_log{
+	my $fh = shift;
+	my $log_data;
+	my %messages;
+
+	$date_elements--;
+
+	require Time::Piece;
+	Time::Piece->import;
+
+	while(my $line = readline($fh)){
+		if($line =~ m#postfix/smtpd\[\d+\]: ([\w\d]+): client=(\S+)\[(\d+\.\d+\.\d+\.\d+)\]#){
+			my $id = $1;
+			$messages{$id}->{timestamp_start} = get_epoch_from_line($line, $date_elements, $date_format);
+			$messages{$id}->{message_id} = $1;
+			$messages{$id}->{remote_hostname} = $2;
+			$messages{$id}->{remote_host} = $3;
+			if($line =~ m#sasl_username=(\S+)#){
+				$messages{$id}->{auth_username} = $1;
+			}
+		}elsif($line =~ m#postfix/cleanup\[\d+\]: ([\w\d]+): warning: header (\S+): (.+) from (\S+); from=+#){
+			my $id = $1;
+			my $header_name = $2;
+			my $header_content = $3;
+			if($header_name =~ m/^subject$/i){
+				$messages{$id}->{subject} = $header_content
+			}else{
+				$messages{$id}->{headers}->{$header_name} = $header_content;
+			}
+		}elsif($line =~ m#postfix/.+\[\d+\]: ([\w\d]+): (.+)#){
+			my $id = $1;
+			my $message =$2;
+			foreach my $bit (split m/,\s+/, $message){
+				if($bit =~ m#^to=<([^>]+)>#){
+					$messages{$id}->{to} = $1;
+				}elsif ($bit =~ m#^relay=([\w\d\.]+)\[(\d+\.\d+\.\d+\.\d+)\]#){
+					$messages{$id}->{relay_hostname} = $1;
+					$messages{$id}->{relay_host} = $2;
+					$messages{$id}->{remote_or_local} = "remote";
+				}elsif ($bit =~ m#^relay=([a-z]+)$#){
+					my $relay = $1;
+					$messages{$id}->{relay} = $relay;
+					if($relay =~ m/^(local|vacation|virtual)$/){
+						$messages{$id}->{remote_or_local} = "local";
+					}
+				}elsif ($bit =~ m#^status=(\S+)\s+\((.+)\)$#){
+					$messages{$id}->{smtp_status} = $1;
+					$messages{$id}->{smtp_status_message} = $2;
+				}elsif ($bit =~ m#^orig_to=<([^>]+)>#){
+					$messages{$id}->{orig_to} = $1;
+				}elsif ($bit =~ m#^size=(\d+)#){
+					$messages{$id}->{size} = $1;
+				}elsif ($bit =~ m#^from=<([^>]+)>#){
+					$messages{$id}->{from} = $1;
+				}
+
+			}
+
+		}
+	}
+	return \%messages;
+}
 
 
 sub qmail_parse_log{
@@ -43,28 +133,35 @@ sub qmail_parse_log{
 
 	while(my $line = readline($fh)){
 		chomp($line);
-		if($line =~ m/^(qmail: )?(\d{10}).\d{9} new msg (\d+)$/){
-			$messages{$2}->{timestamp_start} = $2;
-			$messages{$2}->{message_id} = $3;
-		}elsif($line =~ m/^(qmail: )?\d{10}.\d{9} info msg (\d+): bytes (\d+) from <([^\>]+)> qp \d+ uid (\d+)$/){
-			$messages{$2}->{size} = $3;
-			$messages{$2}->{from} = $4;
-			$messages{$2}->{uid} = $5;
-		}elsif($line =~ m/^(qmail: )?(\d{10}).\d{9} starting delivery (\d+): msg (\d+) to (\S+) (\S+)$/){
+		if($line =~ m/(\d{10}).\d{9} new msg (\d+)$/){
+			my $mid = $2;
+			$messages{$mid}->{timestamp_start} = $1;
+			$messages{$mid}->{message_id} = $2;
+		}elsif($line =~ m/\d{10}\.\d+ info msg (\d+): bytes (\d+) from <([^\>]+)> qp \d+ uid (\d+)$/){
+			my $mid = $1;
+			$messages{$mid}->{size} = $2;
+			$messages{$mid}->{from} = $3;
+			$messages{$mid}->{uid} = $4;
+		}elsif($line =~ m/(\d{10})\.\d+ starting delivery (\d+): msg (\d+) to (\S+) (\S+)/){
+			my $timestamp = $1;
+			my $did = $2;
+			my $mid = $3;
 			# delivery_to_message{delivery_id} = $message_id
-			$delivery_to_message{$3} = $4;
+			$delivery_to_message{$did} = $mid;
 			# $messages_to_delivery{message_id} = (delivery_id_1, delivery_id_2, etc.)
-			push(@{$message_to_delivery{$4}}, $3);
-			$messages{$4}->{deliveries}->{$3}->{delivery_id} = $2;
-			$messages{$4}->{deliveries}->{$3}->{timestamp_delivery} = $2;
-			$messages{$4}->{deliveries}->{$3}->{remote_or_local} = $5;
-			$messages{$4}->{deliveries}->{$3}->{to} = $6;
-		}elsif($line =~ m/(qmail: )?(\d{10}).\d{9} delivery (\d+): (\S+): (.+)$/){
-			my $message_id = $delivery_to_message{$3};
-			$messages{$message_id}->{deliveries}->{$3}->{smtp_status} = $4;
-			$messages{$message_id}->{deliveries}->{$3}->{smtp_status_message} = $5;
-		}elsif($line =~ m/(qmail: )?(\d{10}).\d{9} end msg (\d+)$/){
-			$messages{$2}->{timestamp_end} = $2;
+			push(@{$message_to_delivery{$mid}}, $did);
+			$messages{$mid}->{deliveries}->{$did}->{delivery_id} = $did;
+			$messages{$mid}->{deliveries}->{$did}->{timestamp_delivery} = $timestamp;
+			$messages{$mid}->{deliveries}->{$did}->{remote_or_local} = $4;
+			$messages{$mid}->{deliveries}->{$did}->{to} = $5;
+		}elsif($line =~ m/(\d{10})\.\d+ delivery (\d+): (\S+): (.+)$/){
+			my $did = $2;
+			my $mid = $delivery_to_message{$did};
+			$messages{$mid}->{deliveries}->{$did}->{smtp_status} = $3;
+			$messages{$mid}->{deliveries}->{$did}->{smtp_status_message} = $4;
+		}elsif($line =~ m/(\d{10})\.\d+ end msg (\d+)$/){
+			my $mid = $2;
+			$messages{$mid}->{timestamp_end} = $1;
 			foreach my $delivery_id (keys(%message_to_delivery)){
 				delete($delivery_to_message{$delivery_id});
 			}
@@ -72,7 +169,9 @@ sub qmail_parse_log{
 		}
 	}
 
+
 	foreach my $message_id (sort(keys(%messages))){
+		next if $message_id eq 'deliveries';
 		my %message = %{$messages{$message_id}};
 		foreach my $delivery_id (sort(keys(%{$message{deliveries}}))){
 			my %delivery = %{$messages{$message_id}->{deliveries}->{$delivery_id}};
@@ -84,19 +183,72 @@ sub qmail_parse_log{
 			push(@{$log_data}, \%log_line);
 		}
 	}
+	print Dumper($log_data);
+	exit;
 	return ($log_data);
 }
+
+sub get_epoch_from_line{
+	my $line = shift;
+	my $date_elements = shift;
+	my $date_format = shift;
+
+	my $date_string = join(" ", (split(m/\s+/, $line))[0 ...  $date_elements]);
+	$date_string = (localtime())[5] + 1900 ." ".$date_string;
+	$date_format = "%Y ".$date_format;
+	my $t = Time::Piece->strptime($date_string, $date_format);
+	return $t->epoch;
+}
+
+sub get_log_type{
+	my $fh = shift;
+	my $log_type = undef;
+	while(my $line = readline($maillog_fh)){
+		if($line =~ m/postfix\/\w+/){
+			$log_type = 'postfix';
+			last;
+		}elsif($line =~ m/qmail:/){
+			$log_type = 'qmail';
+			last;
+		}elsif($line =~ m/^\d{10}\.\d{9}/){
+			$log_type = 'qmail';
+			last;
+		}
+	}
+	seek($fh,0,0);
+	return $log_type;
+}
+
+
 
 sub usage_and_exit{
 print <<EOF;
 
 maillog2json - converts various forms of maillog into a standard json structure.
+Currently, 'various' means 'qmail and postfix'.
 
 USAGE:
 
-   maillog2json /var/log/maillog
-   cat /var/log/maillog | maillog2json
-   cat qmail_log | tai64nfraction | mailllog2json
+   maillog2json [options] <logfile>
+   cat /var/log/maillog | maillog2json [options]
+   cat qmail_log | tai64nfraction | mailllog2json [options]
+
+OPTIONS:
+
+ --log-type <type>, -t <type>
+         override logfile type detection, 'type' may be one of 'qmail' or 'postfix'
+
+ --pretty
+         produce pretty-printed JSON rather than a single line
+
+ --date-format <format>; --num-date-elements <num>
+         Specify a date format for figuring out the timestamp of log lines 
+	 containing human-friendly dates. <format> should be a pattern suitable
+	 for passing to strptime(), and <num> should be the number of leading 
+         whitespace-separated elements of the log line to take as the date 
+	 string. Defaults:
+	   date-format: $date_format
+	   num-date-elemants: $date_elements++
 
 Either cat the file on stdin or supply it as an argument. For Qmail logfiles using the
 tai64n timestamp, pipe them through tai64nfraction first.
@@ -104,6 +256,35 @@ tai64n timestamp, pipe them through tai64nfraction first.
 Soon there will be something with which to read the JSON, until then use jq:
 
 https://stedolan.github.io/jq/
+
+STRUCTURE:
+
+A JSON array of hashes is returned, keys of these hashes are:
+
+Common:
+* from:                Envelope 'from' address
+* remote_hostname:     DNS name of host making inbound connection
+* remote_host:         IP address of host making inbound connection
+* remote_or_local:     Whether the recipient is local or remote
+* size:                Size of the message, in bytes
+* smtp_status:         SMTP mail-sending status
+* smtp_status_message: Message returned by the remote host on mail-sending
+* timestamp_start:     Timestamp from the first log-line mentioning the message
+* timestamp_end:       Timestamp from any 'delivered' or 'finished' log-line
+* to:                  Recipient address of the emai
+
+Qmail-only:
+* delivery_id:         Qmail's delivery ID (prone to re-use)
+* message_id:          Qmail's message ID (prone to re-use)
+* timestamp_delivery:  Timestamp from the 'delivered' log-line. Qmail only.
+* uid:                 UID of the proces submitting the message; qmail-only
+
+Postfix-only:
+* auth_username:       SASL username (Postfix/SASL only)
+* message_id           Postfix's message ID
+* relay:               Postfix's relay name
+* subject:             Where logged, parsed out of cleanup's warnings
+
 
 EOF
 exit;
