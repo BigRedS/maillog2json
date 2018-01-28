@@ -23,7 +23,7 @@ OPTIONS:
          whitespace-separated elements of the log line to take as the date 
 	 string. Defaults:
 	   date-format: %b %d %T
-	   num-date-elemants: 3++
+	   num-date-elements: 3
 
 Either cat the file on stdin or supply it as an argument. For Qmail logfiles using the
 tai64n timestamp, pipe them through tai64nfraction first.

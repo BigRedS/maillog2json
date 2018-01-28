@@ -248,7 +248,7 @@ OPTIONS:
          whitespace-separated elements of the log line to take as the date 
 	 string. Defaults:
 	   date-format: $date_format
-	   num-date-elemants: $date_elements++
+	   num-date-elements: $date_elements
 
 Either cat the file on stdin or supply it as an argument. For Qmail logfiles using the
 tai64n timestamp, pipe them through tai64nfraction first.
