@@ -7,7 +7,7 @@ So far, it only understands postfix and qmail. Example logs and/or patches
 welcome!
 
 Currently, this is working but largely untested, if this turns out useful it's 
-quite likely to change. 
+quite likely to change quite rapidly as I use it :)
 
 ## Installation
 
