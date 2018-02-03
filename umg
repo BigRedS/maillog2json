@@ -1,7 +1,6 @@
 #! /usr/bin/perl
 
 use strict;
-use JSON;
 use Data::Dumper;
 use Getopt::Long;
 #use Date::Time libdatetime-perl
@@ -13,22 +12,22 @@ my $date_format = '%b %d %T';
 # number of whitespace-separated bits of the date:
 my $date_elements = 3;
 my $fields_string = "to,from,subject";
-my $noheader = undef;
+my $show_header_row = undef;
 
 my @fields = ();
 my @patterns = ();
 my $and = undef;
 
 GetOptions (
-	"and" => \$and,
+	"and|a" => \$and,
 	"help|h" => \$help,
 	"log-type|t" => \$log_type,
 	"json" => \$json,
-	"noheader" => \$noheader,
+	"header" => \$show_header_row,
 	"date-format" => \$date_format,
 	"num-date-elements" => \$date_elements,
-	"patterns=s" => \@patterns,
-	"fields=s" => \$fields_string,
+	"patterns|p=s" => \@patterns,
+	"fields|f=s" => \$fields_string,
 ) or die("Error in command line arguments\n");
 
 usage_and_exit() if $help;
@@ -110,7 +109,7 @@ sub print_results{
 		$field_lengths->{$field_name} = $field_lengths->{$field_name} + 3;
 	}
 
-	unless($noheader){
+	if($show_header_row){
 		foreach my $field (@{$fields}){
 			printf("%-$field_lengths->{$field}s", $field);
 		}
@@ -354,18 +353,18 @@ OPTIONS:
 
   FILTERING AND OUTPUT
     
-    --and
+    --and, -a
          By default, a message is declared a match if a single argument to --pattern
          matches. Call this to require each message match *every* pattern.
 
-    --fields <field1,field2,field3>
+    --fields <field1,field2,field3...>, -f <field1,field2,field3...>
          Which fields to display as a comma-separated string. Default: $fields_string. 
          set this to '_ALL_' to get all of them.
 
     --json
          Produce a (pretty-printed) JSON structure, rather than a human readable list
 
-    --pattern <field_name>:<string>
+    --pattern <field_name>:<string>, -p <field_name>:<string>
           Specifies a pattern to use when filtering, if the field named <field_name>
           contains <string> case-insensitively, it will be declared a match. 
           Specify multiple times to use several matches.
@@ -390,7 +389,7 @@ OPTIONS:
            num-date-elements: $date_elements
 
 
-DATA STRUUCTURE:
+DATA STRUCTURE:
 
 Internally, a hash is created representing each message, some of the keys used
 are universal (in that both supported MTAs log them) others are specific to one
@@ -427,11 +426,11 @@ EXAMPLES
 
     get a quick count of mail-delivery status for a particular domain:
   
-cat /var/log/syslog | ./umg --fields smtp_status --pattern auth_username:\@domain.com --noheader | sort | uniq -c
+cat /var/log/syslog | ./umg --fields smtp_status --pattern auth_username:\@domain.com | sort | uniq -c
 
     See who's been sending all that spam:
 
-cat /var/log/maillog | ./umg --fields auth_username --pattern subject:viagra --pattern subject:cialis  --noheader | sort | uniq
+cat /var/log/maillog | ./umg --f auth_username -p subject:viagra -p subject:cialis | sort | uniq
 
 
 
