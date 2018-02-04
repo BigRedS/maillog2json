@@ -13,6 +13,7 @@ my $date_format = '%b %d %T';
 my $date_elements = 3;
 my $fields_string = "to,from,subject";
 my $show_header_row = undef;
+my $return_log_lines = undef;
 
 my @fields = ();
 my @patterns = ();
@@ -28,6 +29,7 @@ GetOptions (
 	"num-date-elements" => \$date_elements,
 	"patterns|p=s" => \@patterns,
 	"fields|f=s" => \$fields_string,
+	"log-lines" => \$return_log_lines,
 ) or die("Error in command line arguments\n");
 
 usage_and_exit() if $help;
@@ -78,11 +80,15 @@ my $num_regexes = keys(%regexes);
 my(%field_lengths,@results);
 foreach my $message (@{$log_data}){
 	if(grep_message($message, \%regexes, $and) || $num_regexes == 0){
-		$message = trim_message($message, \@fields);
-		foreach my $field (@fields){
-			$field_lengths{$field} = length($message->{$field}) if length($message->{$field}) > $field_lengths{$field};
+		if($return_log_lines){
+			push(@results, $message->{log_lines});
+		}else{
+			$message = trim_message($message, \@fields);
+			foreach my $field (@fields){
+				$field_lengths{$field} = length($message->{$field}) if length($message->{$field}) > $field_lengths{$field};
+			}
+			push(@results,$message);
 		}
-		push(@results,$message);
 	}
 }
 
@@ -93,11 +99,25 @@ if($json){
 	exit;
 }
 
-print_results(\@fields, \%field_lengths, \@results);
+if($return_log_lines){
+	print_log_lines(\@results);
+}else{
+	print_results(\@fields, \%field_lengths, \@results);
+}
 
 # # #
 # #
 #
+
+sub print_log_lines{
+	my $results = shift;
+	foreach my $message (@{$results}){
+		foreach my $line (@{$message}){
+			print $line."\n";
+		}
+		print "\n\n";
+	}
+}
 
 sub print_results{
 
@@ -172,6 +192,7 @@ sub postfix_parse_log{
 	Time::Piece->import;
 
 	while(my $line = readline($fh)){
+		chomp($line);
 		if($line =~ m#postfix/smtpd\[\d+\]: ([\w\d]+): client=(\S+)\[(\d+\.\d+\.\d+\.\d+)\]#){
 			my $id = $1;
 			$messages{$id}->{timestamp_start} = get_epoch_from_line($line, $date_elements, $date_format);
@@ -182,6 +203,7 @@ sub postfix_parse_log{
 			if($line =~ m#sasl_username=(\S+)#){
 				$messages{$id}->{auth_username} = $1;
 			}
+			push(@{$messages{$id}->{log_lines}}, $line);
 		}elsif($line =~ m#postfix/cleanup\[\d+\]: ([\w\d]+): warning: header (\S+): (.+) from (\S+); from=+#){
 			my $id = $1;
 			my $header_name = $2;
@@ -191,6 +213,7 @@ sub postfix_parse_log{
 			}else{
 				$messages{$id}->{headers}->{$header_name} = $header_content;
 			}
+			push(@{$messages{$id}->{log_lines}}, $line);
 		}elsif($line =~ m#postfix/.+\[\d+\]: ([\w\d]+): (.+)#){
 			my $id = $1;
 			my $message =$2;
@@ -219,8 +242,10 @@ sub postfix_parse_log{
 				}
 
 			}
+			push(@{$messages{$id}->{log_lines}}, $line);
 		}elsif($line =~ m#postfix/.+\[\d+]: ([\w\d]+): removed#){
 			my $id = $1;
+			push(@{$messages{$id}->{log_lines}}, $line);
 			push(@log_data, $messages{$id});
 			delete($messages{$id});
 		}
@@ -243,56 +268,80 @@ sub qmail_parse_log{
 
 	while(my $line = readline($fh)){
 		chomp($line);
-		if($line =~ m/(\d{10}).\d{9} new msg (\d+)$/){
-			my $mid = $2;
-			$messages{$mid}->{timestamp_start} = $1;
-			$messages{$mid}->{message_id} = $2;
+		if($line =~ m/(\d{10}).\d+ new msg (\d+)$/){
+			my $msg_id = $2;
+			$messages{$msg_id}->{timestamp_start} = $1;
+			$messages{$msg_id}->{message_id} = $2;
+			$messages{$msg_id}->{log_lines}->{$.} = $line;
 		}elsif($line =~ m/\d{10}\.\d+ info msg (\d+): bytes (\d+) from <([^\>]+)> qp \d+ uid (\d+)$/){
-			my $mid = $1;
-			$messages{$mid}->{size} = $2;
-			$messages{$mid}->{from} = $3;
-			$messages{$mid}->{uid} = $4;
+			my $msg_id = $1;
+			$messages{$msg_id}->{size} = $2;
+			$messages{$msg_id}->{from} = $3;
+			$messages{$msg_id}->{uid} = $4;
+			$messages{$msg_id}->{log_lines}->{$.} = $line;
 		}elsif($line =~ m/(\d{10})\.\d+ starting delivery (\d+): msg (\d+) to (\S+) (\S+)/){
 			my $timestamp = $1;
 			my $did = $2;
-			my $mid = $3;
+			my $msg_id = $3;
 			# delivery_to_message{delivery_id} = $message_id
-			$delivery_to_message{$did} = $mid;
+			$delivery_to_message{$did} = $msg_id;
 			# $messages_to_delivery{message_id} = (delivery_id_1, delivery_id_2, etc.)
-			push(@{$message_to_delivery{$mid}}, $did);
-			$messages{$mid}->{deliveries}->{$did}->{delivery_id} = $did;
-			$messages{$mid}->{deliveries}->{$did}->{timestamp_delivery} = $timestamp;
-			$messages{$mid}->{deliveries}->{$did}->{remote_or_local} = $4;
-			$messages{$mid}->{deliveries}->{$did}->{to} = $5;
+			push(@{$message_to_delivery{$msg_id}}, $did);
+			$messages{$msg_id}->{deliveries}->{$did}->{delivery_id} = $did;
+			$messages{$msg_id}->{deliveries}->{$did}->{timestamp_delivery} = $timestamp;
+			$messages{$msg_id}->{deliveries}->{$did}->{remote_or_local} = $4;
+			$messages{$msg_id}->{deliveries}->{$did}->{to} = $5;
+			$messages{$msg_id}->{deliveries}->{$did}->{log_lines}->{$.} = $line;
 		}elsif($line =~ m/(\d{10})\.\d+ delivery (\d+): (\S+): (.+)$/){
 			my $did = $2;
-			my $mid = $delivery_to_message{$did};
-			$messages{$mid}->{deliveries}->{$did}->{smtp_status} = $3;
-			$messages{$mid}->{deliveries}->{$did}->{smtp_status_message} = $4;
+			my $msg_id = $delivery_to_message{$did};
+			$messages{$msg_id}->{deliveries}->{$did}->{smtp_status} = $3;
+			$messages{$msg_id}->{deliveries}->{$did}->{smtp_status_message} = $4;
+			$messages{$msg_id}->{deliveries}->{$did}->{log_lines}->{$.} = $line;
 		}elsif($line =~ m/(\d{10})\.\d+ end msg (\d+)$/){
-			my $mid = $2;
-			$messages{$mid}->{timestamp_end} = $1;
+			my $msg_id = $2;
+			$messages{$msg_id}->{timestamp_end} = $1;
+			$messages{$msg_id}->{log_lines}->{$.} = $line;
+
+			# Since this is the end of a message:
+			my %message = %{$messages{$msg_id}};
+
+			# herein:
+			# msg_id is qmail's message id
+			# delivery_id is qmail's delivery id
+			# message_id is *our* message_id, where a message is a delivery/msg combination
+			# message_entry is our complete record of a delivery/msg combination
+
+			my %deliveries = %{$message{deliveries}};
+			delete($message{deliveries});
+			my %log_lines = %{$message{log_lines}};
+			delete($message{log_lines});
+
+			foreach my $delivery_id (sort(keys(%deliveries))){
+				my %delivery = %{$messages{$msg_id}->{deliveries}->{$delivery_id}};
+				my $message_id = $msg_id."_".$delivery_id."_".$message{timestamp_start};
+
+				my %m_log_lines = %log_lines;
+				my %log_lines = (%m_log_lines, %{$delivery{log_lines}});
+
+				$message{message_id} = $message_id;
+				my %message_entry = ( %delivery, %message );
+				my @log_lines_arr;
+				foreach my $key (sort(keys(%log_lines))){
+					push(@log_lines_arr, $log_lines{$key});
+				}
+				$message_entry{log_lines} = \@log_lines_arr;
+				push(@{$log_data}, \%message_entry);
+			}
 			foreach my $delivery_id (keys(%message_to_delivery)){
 				delete($delivery_to_message{$delivery_id});
 			}
 			delete($message_to_delivery{$3});
-		}
-	}
-
-
-	foreach my $message_id (sort(keys(%messages))){
-		next if $message_id eq 'deliveries';
-		my %message = %{$messages{$message_id}};
-		foreach my $delivery_id (sort(keys(%{$message{deliveries}}))){
-			my %delivery = %{$messages{$message_id}->{deliveries}->{$delivery_id}};
-			my $id = $message_id."_".$delivery_id;
+			delete($messages{$msg_id});
 			
-			my %log_line = ( %message, %delivery );
-			$log_line{_id} = $id;
-			delete($log_line{deliveries});
-			push(@{$log_data}, \%log_line);
 		}
 	}
+
 	return ($log_data);
 }
 
