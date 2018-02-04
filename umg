@@ -188,23 +188,45 @@ sub postfix_parse_log{
 
 	$date_elements--;
 
+
 	require Time::Piece;
 	Time::Piece->import;
 
+	my %per_pid_log_lines;
+
 	while(my $line = readline($fh)){
 		chomp($line);
-		if($line =~ m#postfix/smtpd\[\d+\]: ([\w\d]+): client=(\S+)\[(\d+\.\d+\.\d+\.\d+)\]#){
-			my $id = $1;
+		next unless $line =~ m/postfix/;
+		if($line =~ m#postfix/smtpd\[(\d+)\]: ([[A-Z0-9]+): client=(\S+)\[(\d+\.\d+\.\d+\.\d+)\]#){
+			my $pid = $1;
+			my $id = $2;
+
+			# Postfix queue IDs are guaranteed to never overlap, but not
+			# to be unique over any length of time of more than a second.
+			# Deal here with seeing the same ID twice.
+			if($messages{$id}){
+				my $old_message = $messages{$id};
+				my $old_message_new_id = $id.$old_message->{timestamp_start};
+				$messages{$old_message_new_id} = $old_message;
+				delete($messages{$id});
+			}
+
 			$messages{$id}->{timestamp_start} = get_epoch_from_line($line, $date_elements, $date_format);
-			$messages{$id}->{message_id} = $1;
-			$messages{$id}->{id} = $1;
-			$messages{$id}->{remote_hostname} = $2;
-			$messages{$id}->{remote_host} = $3;
+			$messages{$id}->{queue_id} = $id;
+			$messages{$id}->{id} = $id;
+			$messages{$id}->{remote_hostname} = $3;
+			$messages{$id}->{remote_host} = $4;
 			if($line =~ m#sasl_username=(\S+)#){
 				$messages{$id}->{auth_username} = $1;
 			}
-			push(@{$messages{$id}->{log_lines}}, $line);
-		}elsif($line =~ m#postfix/cleanup\[\d+\]: ([\w\d]+): warning: header (\S+): (.+) from (\S+); from=+#){
+			if($per_pid_log_lines{smtpd}->{$pid}){
+				foreach my $key (keys(%{$per_pid_log_lines{smtpd}->{$pid}})){
+					$messages{$id}->{log_lines}->{$key} = $per_pid_log_lines{smtpd}->{$pid}->{$key};
+				}
+				delete($per_pid_log_lines{smtpd}->{$pid});
+			}
+			$messages{$id}->{log_lines}->{$.} = $line;
+		}elsif($line =~ m#postfix/cleanup\[\d+\]: ([A-Z0-9]+): warning: header (\S+): (.+) from (\S+); from=+#){
 			my $id = $1;
 			my $header_name = $2;
 			my $header_content = $3;
@@ -213,8 +235,33 @@ sub postfix_parse_log{
 			}else{
 				$messages{$id}->{headers}->{$header_name} = $header_content;
 			}
-			push(@{$messages{$id}->{log_lines}}, $line);
-		}elsif($line =~ m#postfix/.+\[\d+\]: ([\w\d]+): (.+)#){
+			$messages{$id}->{log_lines}->{$.} = $line;
+		}elsif($line =~ m#postfix/qmgr\[\d+\]: ([A-Z0-9]+): removed#){
+			my $id = $1;
+			$messages{$id}->{log_lines}->{$.} = $line;
+			
+
+			my %message = %{$messages{$id}};
+
+			my %log_lines = %{$message{log_lines}};
+			delete($message{log_lines});
+			my @log_lines;
+			foreach my $key (sort(keys(%log_lines))){
+				push(@log_lines, $log_lines{$key});
+			}
+			$message{log_lines} = \@log_lines;
+			push(@log_data, \%message);
+			delete($messages{$id});
+		}elsif($line =~ m#postfix/([a-z]+)\[(\d+)\]:\s+(.+)$#){
+			my $daemon = $1;
+			my $pid = $2;
+			my $rest = $3;
+			if($rest =~ m/^(disconnect from|lost connection)/){
+				delete($per_pid_log_lines{$daemon}->{$pid})
+			}else{
+				$per_pid_log_lines{$daemon}->{$pid}->{$.} = $line;
+			}
+		}elsif($line =~ m#postfix/[a-z]+\[\d+\]: ([A-Z0-9]+): (.+)#){
 			my $id = $1;
 			my $message =$2;
 			foreach my $bit (split m/,\s+/, $message){
@@ -242,18 +289,15 @@ sub postfix_parse_log{
 				}
 
 			}
-			push(@{$messages{$id}->{log_lines}}, $line);
-		}elsif($line =~ m#postfix/.+\[\d+]: ([\w\d]+): removed#){
-			my $id = $1;
-			push(@{$messages{$id}->{log_lines}}, $line);
-			push(@log_data, $messages{$id});
-			delete($messages{$id});
+			$messages{$id}->{log_lines}->{$.} = $line;
+		}else{
+#			print "$line\n";
 		}
+
 	}
-	foreach my $id (keys(%messages)){
-		push(@log_data, $messages{$id});
-	}
-	return \@log_data;
+	return (\@log_data);
+	print Dumper(@log_data);
+	exit;
 }
 
 
@@ -388,8 +432,8 @@ print <<EOF;
 
 umg - the Univeral Mail Log Grepper
 
-parses various forms of mail log into a standard structure, which can then
-be filtered and output either as JSON or something human-readable
+parses various (well, two) forms of mail log into a standard structure, which 
+can then be filtered and output either as JSON or something human-readable
 
 USAGE:
 
@@ -415,8 +459,9 @@ OPTIONS:
 
     --pattern <field_name>:<string>, -p <field_name>:<string>
           Specifies a pattern to use when filtering, if the field named <field_name>
-          contains <string> case-insensitively, it will be declared a match. 
-          Specify multiple times to use several matches.
+          contains <string> case-insensitively, it will be declared a match. The 
+	  <string> part is interpreted as a Perl regex.
+          Specify multiple times to use several patterns.
 
   
   LOGFILE PARSING AND INPUT
@@ -433,7 +478,8 @@ OPTIONS:
          containing human-friendly dates. <format> should be a pattern suitable
          for passing to strptime(), and <num> should be the number of leading 
          whitespace-separated elements of the log line to take as the date 
-         string. Defaults:
+         string. Defaults seem right for both Debian's and RHEL's Postfix/Syslog
+	 combinations:
            date-format: $date_format
            num-date-elements: $date_elements
 
@@ -446,30 +492,33 @@ or the other. The 'id' field is based on the MTA's own internal ID, but no
 guarantee is made that it will be usefully-so.
 
 Common:
-* from:                Envelope 'from' address
-* id:                  A unique ID for the message within the output
-* remote_hostname:     DNS name of host making inbound connection
-* remote_host:         IP address of host making inbound connection
-* remote_or_local:     Whether the recipient is local or remote
-* size:                Size of the message, in bytes
-* smtp_status:         SMTP mail-sending status
-* smtp_status_message: Message returned by the remote host on mail-sending
-* timestamp_start:     Timestamp from the first log-line mentioning the message
-* timestamp_end:       Timestamp from any 'delivered' or 'finished' log-line
-* to:                  Recipient address of the emai
+* from                Envelope 'from' address
+* id                  A unique ID for the message within the output of umg
+* remote_hostname     DNS name of host making inbound connection, if in the log
+* remote_host         IP address of host making inbound connection
+* remote_or_local     Whether the recipient is local or remote
+* size                Size of the message, in bytes
+* smtp_status         SMTP mail-sending status
+* smtp_status_message Message returned by the remote host on mail-sending
+* timestamp_start     Timestamp from the first log-line mentioning the message
+* timestamp_end       Timestamp from any 'delivered' or 'finished' log-line
+* to                  Recipient address of the email
 
 Qmail-only:
-* delivery_id:         Qmail's delivery ID (prone to re-use)
-* message_id:          Qmail's message ID (prone to re-use)
-* timestamp_delivery:  Timestamp from the 'delivered' log-line. Qmail only.
-* uid:                 UID of the proces submitting the message; qmail-only
+* delivery_id         Qmail's delivery ID (prone to re-use)
+* message_id          Qmail's message ID (prone to re-use)
+* timestamp_delivery  Timestamp from the 'delivered' log-line
+* uid                 UID of the proces submitting the message
 
-Postfix-only:
-* auth_username:       SASL username (Postfix/SASL only)
-* message_id           Postfix's message ID
-* relay:               Postfix's relay name
-* subject:             Where logged, parsed out of cleanup's warnings
+Postfix-only
+* auth_username       SASL username (Postfix/SASL only)
+* queue_id            Postfix's queue ID
+* relay               Postfix's relay name
+* subject             Where logged, parsed out of cleanup's warnings
 
+additionally, in the JSON, the `log lines` key contains an array of the lines from
+the input that were deemed related to the message. These are stripped out of non-
+JSON output, and displayed by themselves when --log-lines is used.
 
 EXAMPLES
 
