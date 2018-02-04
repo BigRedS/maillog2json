@@ -54,27 +54,31 @@ or the other. The 'id' field is based on the MTA's own internal ID, but no
 guarantee is made that it will be usefully-so.
 
 Common:
-* from:                Envelope 'from' address
-* remote_hostname:     DNS name of host making inbound connection
-* remote_host:         IP address of host making inbound connection
-* remote_or_local:     Whether the recipient is local or remote
-* size:                Size of the message, in bytes
-* smtp_status:         SMTP mail-sending status
-* smtp_status_message: Message returned by the remote host on mail-sending
-* timestamp_start:     Timestamp from the first log-line mentioning the message
-* timestamp_end:       Timestamp from any 'delivered' or 'finished' log-line
-* to:                  Recipient address of the emai
+* `from`:                Envelope 'from' address
+* `remote_hostname`:     DNS name of host making inbound connection, if it's provided in the log
+* `remote_host`:         IP address of host making inbound connection
+* `remote_or_local`:     Whether the recipient is local or remote
+* `size`:                Size of the message, in bytes
+* `smtp_status`:         SMTP mail-sending status
+* `smtp_status_message`: Message returned by the remote host on mail-sending
+* `timestamp_start`:     Timestamp from the first log-line mentioning the message
+* `timestamp_end`:       Timestamp from any 'delivered' or 'finished' log-line
+* `to`:                  Recipient address of the emai
 
 Qmail-only:
-* delivery_id:         Qmail's delivery ID (prone to re-use)
-* message_id:          Qmail's message ID (prone to re-use)
-* timestamp_delivery:  Timestamp from the 'delivered' log-line. Qmail only.
-* uid:                 UID of the proces submitting the message; qmail-only
+* `delivery_id`:         Qmail's delivery ID (prone to re-use)
+* `message_id`:          Qmail's message ID (prone to re-use)
+* `timestamp_delivery`:  Timestamp from the 'delivered' log-line.
+* `uid`:                 UID of the proces submitting the message.
 
 Postfix-only:
-* auth_username:       SASL username (Postfix/SASL only)
-* message_id           Postfix's message ID
-* relay:               Postfix's relay name
-* subject:             Where logged, parsed out of cleanup's warnings
+* `auth_username`:       SASL username (Postfix/SASL only)
+* `queue_id`:            Postfix's queue ID
+* `relay`:               Postfix's relay name
+* `subject`:             Where logged, parsed out of cleanup's warnings
+
+additionally, in the JSON, the `log lines` key contains an array of the lines from
+the input that were deemed related to the message. These are stripped out of non-
+JSON output, and displayed by themselves when --log-lines is used.
 
 
