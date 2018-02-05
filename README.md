@@ -11,11 +11,13 @@ quite likely to change quite rapidly as I use it :)
 
 ## Installation
 
-So far, where installed, this is just checked out into 
+So far, where installed, this is just downloaded as a single file into 
 
-    /root/universal-maillog-grepper/
+    /usr/local/bin/umg
 
-So use it there :) Its only non-core dependency is JSON.
+It requires the perl JSON library (`libjson-perl` on Debian and `perl-JSON.noarch`
+on RedHat), and `Time::Piece` which is part of core Perl on Debian but needs
+installing (`perl-Time-Piece.x86_64`) on RedHat.
 
 ## Use
 
