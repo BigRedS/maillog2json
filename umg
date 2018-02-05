@@ -421,7 +421,7 @@ sub get_log_type{
 }
 
 sub debug{
-	return unless %ENV{DEBUG};
+	return unless $ENV{DEBUG};
 	my $message = shift;
 	chomp($message);
 	print STDERR "DEBUG: $message\n";
