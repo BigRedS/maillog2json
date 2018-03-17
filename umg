@@ -296,8 +296,6 @@ sub postfix_parse_log{
 
 	}
 	return (\@log_data);
-	print Dumper(@log_data);
-	exit;
 }
 
 
