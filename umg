@@ -5,6 +5,8 @@ use Data::Dumper;
 use Getopt::Long;
 #use Date::Time libdatetime-perl
 
+my $version = '0.20180315';
+
 my $help = undef;
 my $json = undef;
 my $log_type = undef;
@@ -14,6 +16,7 @@ my $date_elements = 3;
 my $fields_string = "to,from,subject";
 my $show_header_row = undef;
 my $return_log_lines = undef;
+my $show_version = undef;
 
 my @fields = ();
 my @patterns = ();
@@ -30,8 +33,10 @@ GetOptions (
 	"patterns|p=s" => \@patterns,
 	"fields|f=s" => \$fields_string,
 	"log-lines" => \$return_log_lines,
+	"version" => \$show_version,
 ) or die("Error in command line arguments\n");
 
+print "umg (universal maillog grepper) version $version\n" and exit if $show_version;
 usage_and_exit() if $help;
 
 @fields = split(m/,\s*/, $fields_string);
