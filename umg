@@ -74,7 +74,7 @@ debug("Assembling regexes");
 foreach my $search (@patterns){
 	my ($field,$pattern) = split(m/:/, $search);
 	push(@{$regexes{$field}}, qr/$pattern/);
-	debug("  $field: $pattern\n");
+	debug("  $field =~ m/$pattern/i\n");
 }
 my $num_regexes = keys(%regexes);
 
@@ -241,10 +241,14 @@ sub postfix_parse_log{
 				$messages{$id}->{headers}->{$header_name} = $header_content;
 			}
 			$messages{$id}->{log_lines}->{$.} = $line;
+		}elsif($line =~ m#postfix/qmgr\[\d+\]: ([A-Z0-9]+): from=<([^>]+)>#){
+			my $id = $1;
+			my $from = $2;
+			$messages{$id}->{from} = $from;
+			$messages{$id}->{log_lines}->{$.} = $line;
 		}elsif($line =~ m#postfix/qmgr\[\d+\]: ([A-Z0-9]+): removed#){
 			my $id = $1;
 			$messages{$id}->{log_lines}->{$.} = $line;
-			
 
 			my %message = %{$messages{$id}};
 
@@ -320,7 +324,7 @@ sub qmail_parse_log{
 			$messages{$msg_id}->{timestamp_start} = $1;
 			$messages{$msg_id}->{message_id} = $2;
 			$messages{$msg_id}->{log_lines}->{$.} = $line;
-		}elsif($line =~ m/\d{10}\.\d+ info msg (\d+): bytes (\d+) from <([^\>]+)> qp \d+ uid (\d+)$/){
+		}elsif($line =~ m/\d{10}\.\d+ info msg (\d+): bytes (\d+) from=<([^\>]+)> qp \d+ uid (\d+)$/){
 			my $msg_id = $1;
 			$messages{$msg_id}->{size} = $2;
 			$messages{$msg_id}->{from} = $3;
