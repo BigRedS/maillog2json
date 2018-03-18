@@ -372,7 +372,10 @@ sub qmail_parse_log{
 			# message_id is *our* message_id, where a message is a delivery/msg combination
 			# message_entry is our complete record of a delivery/msg combination
 
-			my %deliveries = %{$message{deliveries}};
+			my %deliveries = ();
+			if($message{deliveries}){
+				%deliveries = %{$message{deliveries}};
+			}
 			delete($message{deliveries});
 			my %log_lines = %{$message{log_lines}};
 			delete($message{log_lines});
