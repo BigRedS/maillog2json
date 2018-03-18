@@ -231,6 +231,15 @@ sub postfix_parse_log{
 				delete($per_pid_log_lines{smtpd}->{$pid});
 			}
 			$messages{$id}->{log_lines}->{$.} = $line;
+		}elsif($line =~ m#postfix/pipe\[\d+\]: ([A-Z0-9]+): to=<([^>]+)>#){
+			my $id = $1;
+			my $to = $2;
+			my $relay = $3;
+			my $status = $4;
+			$messages{$id}->{to} = $to;
+			$messages{$id}->{relay} = $relay;
+			$messages{$id}->{smtp_status} = $status;
+			$messages{$id}->{log_lines}->{$.} = $line;
 		}elsif($line =~ m#postfix/cleanup\[\d+\]: ([A-Z0-9]+): warning: header (\S+): (.+) from (\S+); from=+#){
 			my $id = $1;
 			my $header_name = $2;
