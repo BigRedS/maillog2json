@@ -197,69 +197,70 @@ sub postfix_parse_log{
 	require Time::Piece;
 	Time::Piece->import;
 
+	# Postfix logs some lines prior to assigning a message ID, including the initial
+	# 'connect from' one which contains the client IP address. Lines like this are parsed
+	# and their content stored in this hash. When a message ID is seen for the first time,
+	# these logs are retrieved from this hash.
 	my %per_pid_log_lines;
 
 	while(my $line = readline($fh)){
 		chomp($line);
-		next unless $line =~ m/postfix/;
-		if($line =~ m#postfix/smtpd\[(\d+)\]: ([[A-Z0-9]+): client=(\S+)\[(\d+\.\d+\.\d+\.\d+)\]#){
-			my $pid = $1;
-			my $id = $2;
+		my ($daemon,$pid,$mid,$logged);
 
-			# Postfix queue IDs are guaranteed to never overlap, but not
-			# to be unique over any length of time of more than a second.
-			# Deal here with seeing the same ID twice.
-			if($messages{$id}){
-				my $old_message = $messages{$id};
-				my $old_message_new_id = $id.$old_message->{timestamp_start};
-				$messages{$old_message_new_id} = $old_message;
-				delete($messages{$id});
-			}
+		if($line =~ m#postfix/([a-z]+)\[(\d+)\]: ([A-Z0-9]+):\s*(.+)\s*$#){
+			($daemon,$pid,$mid,$logged) = ($1,$2,$3,$4);
+#		}elsif($line =~ m#postfix/([a-z]+)\[(\d+)\]:\s*(.+):#){
+#			($daemon,$pid,$logged) = ($1,$2,$3);
+#			print "[$daemon][$pid]\n";
+#			$per_pid_log_lines{$daemon}->{$pid}->{$.} = $line;
+#			next;
+		}else{
+			next;
+		}
 
-			$messages{$id}->{timestamp_start} = get_epoch_from_line($line, $date_elements, $date_format);
-			$messages{$id}->{queue_id} = $id;
-			$messages{$id}->{id} = $id;
-			$messages{$id}->{remote_hostname} = $3;
-			$messages{$id}->{remote_host} = $4;
-			if($line =~ m#sasl_username=(\S+)#){
-				$messages{$id}->{auth_username} = $1;
-			}
-			if($per_pid_log_lines{smtpd}->{$pid}){
-				foreach my $key (keys(%{$per_pid_log_lines{smtpd}->{$pid}})){
-					$messages{$id}->{log_lines}->{$key} = $per_pid_log_lines{smtpd}->{$pid}->{$key};
+		$messages{$mid}->{log_lines}->{$.} = $line;
+
+#		if($logged =~ m#^(disconnect from|lost connection)#){
+#			delete($per_pid_log_lines{$daemon}->{$pid})
+#		}
+
+		if($logged =~ m#client=#){
+			if($logged =~ m#client=(\S+)\[(\d+\.\d+\.\d+\.\d+)\]#){
+				my($client_name,$client_addr) = ($1,$2);
+				# Postfix queue IDs are guaranteed to never overlap, but not
+				# to be unique over any length of time of more than a second.
+				# Deal here with seeing the same ID twice.
+				if($messages{$mid}){
+					my $old_message = $messages{$mid};
+					my $old_message_new_id = $mid.$old_message->{timestamp_start};
+					$messages{$old_message_new_id} = $old_message;
+					delete($messages{$mid});
 				}
-				delete($per_pid_log_lines{smtpd}->{$pid});
-			}
-			$messages{$id}->{log_lines}->{$.} = $line;
-		}elsif($line =~ m#postfix/pipe\[\d+\]: ([A-Z0-9]+): to=<([^>]+)>#){
-			my $id = $1;
-			my $to = $2;
-			my $relay = $3;
-			my $status = $4;
-			$messages{$id}->{to} = $to;
-			$messages{$id}->{relay} = $relay;
-			$messages{$id}->{smtp_status} = $status;
-			$messages{$id}->{log_lines}->{$.} = $line;
-		}elsif($line =~ m#postfix/cleanup\[\d+\]: ([A-Z0-9]+): warning: header (\S+): (.+) from (\S+); from=+#){
-			my $id = $1;
-			my $header_name = $2;
-			my $header_content = $3;
-			if($header_name =~ m/^subject$/i){
-				$messages{$id}->{subject} = $header_content
+				$messages{$mid}->{timestamp_start} = get_epoch_from_line($line, $date_elements, $date_format);
+				$messages{$mid}->{queue_id} = $mid;
+				$messages{$mid}->{id} = $mid;
+				$messages{$mid}->{remote_hostname} = $3;
+				$messages{$mid}->{remote_host} = $4;
+				if($line =~ m#sasl_username=(\S+)#){
+					$messages{$mid}->{auth_username} = $1;
+				}
+#				if($per_pid_log_lines{$daemon}->{$pid}){
+#					foreach my $key (keys(%{$per_pid_log_lines{$daemon}->{$pid}})){
+#						$messages{$mid}->{log_lines}->{$key} = $per_pid_log_lines{$daemon}->{$pid}->{$key};
+#					}
+#					delete($per_pid_log_lines{smtpd}->{$pid});
+#				}
 			}else{
-				$messages{$id}->{headers}->{$header_name} = $header_content;
+				print STDERR "Failed to parse client info out of line $.";
 			}
-			$messages{$id}->{log_lines}->{$.} = $line;
-		}elsif($line =~ m#postfix/qmgr\[\d+\]: ([A-Z0-9]+): from=<([^>]+)>#){
-			my $id = $1;
-			my $from = $2;
-			$messages{$id}->{from} = $from;
-			$messages{$id}->{log_lines}->{$.} = $line;
-		}elsif($line =~ m#postfix/qmgr\[\d+\]: ([A-Z0-9]+): removed#){
-			my $id = $1;
-			$messages{$id}->{log_lines}->{$.} = $line;
-
-			my %message = %{$messages{$id}};
+		}elsif($daemon eq 'cleanup' and $logged =~ m#warning: header (\S+): (.+) from (\S+); from=+#){
+			if($1 =~ m/^subject$/i){
+				$messages{$mid}->{subject} = $2;
+			}else{
+				$messages{$mid}->{$1} = $2;
+			}
+		}elsif($daemon eq 'qmgr' and $logged =~ m#removed$#){
+			my %message = %{$messages{$mid}};
 
 			my %log_lines = %{$message{log_lines}};
 			delete($message{log_lines});
@@ -269,47 +270,32 @@ sub postfix_parse_log{
 			}
 			$message{log_lines} = \@log_lines;
 			push(@log_data, \%message);
-			delete($messages{$id});
-		}elsif($line =~ m#postfix/([a-z]+)\[(\d+)\]:\s+(.+)$#){
-			my $daemon = $1;
-			my $pid = $2;
-			my $rest = $3;
-			if($rest =~ m/^(disconnect from|lost connection)/){
-				delete($per_pid_log_lines{$daemon}->{$pid})
-			}else{
-				$per_pid_log_lines{$daemon}->{$pid}->{$.} = $line;
-			}
-		}elsif($line =~ m#postfix/[a-z]+\[\d+\]: ([A-Z0-9]+): (.+)#){
-			my $id = $1;
-			my $message =$2;
-			foreach my $bit (split m/,\s+/, $message){
+			delete($messages{$mid});
+		}else{
+			foreach my $bit (split m/,\s+/, $logged){
 				if($bit =~ m#^to=<([^>]+)>#){
-					$messages{$id}->{to} = $1;
+					$messages{$mid}->{to} = $1;
 				}elsif ($bit =~ m#^relay=([\w\d\.]+)\[(\d+\.\d+\.\d+\.\d+)\]#){
-					$messages{$id}->{relay_hostname} = $1;
-					$messages{$id}->{relay_host} = $2;
-					$messages{$id}->{remote_or_local} = "remote";
+					$messages{$mid}->{relay_hostname} = $1;
+					$messages{$mid}->{relay_host} = $2;
+					$messages{$mid}->{remote_or_local} = "remote";
 				}elsif ($bit =~ m#^relay=([a-z]+)$#){
 					my $relay = $1;
-					$messages{$id}->{relay} = $relay;
+					$messages{$mid}->{relay} = $relay;
 					if($relay =~ m/^(local|vacation|virtual)$/){
-						$messages{$id}->{remote_or_local} = "local";
+						$messages{$mid}->{remote_or_local} = "local";
 					}
 				}elsif ($bit =~ m#^status=(\S+)\s+\((.+)\)$#){
-					$messages{$id}->{smtp_status} = $1;
-					$messages{$id}->{smtp_status_message} = $2;
+					$messages{$mid}->{smtp_status} = $1;
+					$messages{$mid}->{smtp_status_message} = $2;
 				}elsif ($bit =~ m#^orig_to=<([^>]+)>#){
-					$messages{$id}->{orig_to} = $1;
+					$messages{$mid}->{orig_to} = $1;
 				}elsif ($bit =~ m#^size=(\d+)#){
-					$messages{$id}->{size} = $1;
+					$messages{$mid}->{size} = $1;
 				}elsif ($bit =~ m#^from=<([^>]+)>#){
-					$messages{$id}->{from} = $1;
+					$messages{$mid}->{from} = $1;
 				}
-
 			}
-			$messages{$id}->{log_lines}->{$.} = $line;
-		}else{
-#			print "$line\n";
 		}
 
 	}
