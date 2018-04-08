@@ -141,7 +141,6 @@ sub print_results{
 		print "\n";
 	}
 
-
 	foreach my $message (@{$results}){
 		foreach my $field (@{$fields}){
 			printf("%-$field_lengths->{$field}s", $message->{$field});
@@ -224,23 +223,35 @@ sub postfix_parse_log{
 #			delete($per_pid_log_lines{$daemon}->{$pid})
 #		}
 
-		if($logged =~ m#client=#){
+		if($daemon eq 'pickup' or ($daemon eq 'smtpd' and $logged =~ m#client=#)){
+			# Postfix queue IDs are guaranteed to never overlap, but not
+			# to be unique over any length of time of more than a second.
+			# Deal here with seeing the same ID twice.
+			if($messages{$mid}){
+				my $old_message = $messages{$mid};
+				my $old_message_new_id = $mid.$old_message->{timestamp_start};
+				$messages{$old_message_new_id} = $old_message;
+				delete($messages{$mid});
+			}
+		}
+
+		if($daemon eq 'pickup'){
+			if($line =~ m/uid=(\d+) from=<([^>]+)>/){
+				$messages{$mid}->{uid} = $1;
+				$messages{$mid}->{from} = $2;
+			}else{
+				print STDERR "Failed to parse mail-sender from line $.\n";
+			}
+		}
+
+		if($daemon eq 'smtpd' and $logged =~ m#client=#){
 			if($logged =~ m#client=(\S+)\[(\d+\.\d+\.\d+\.\d+)\]#){
 				my($client_name,$client_addr) = ($1,$2);
-				# Postfix queue IDs are guaranteed to never overlap, but not
-				# to be unique over any length of time of more than a second.
-				# Deal here with seeing the same ID twice.
-				if($messages{$mid}){
-					my $old_message = $messages{$mid};
-					my $old_message_new_id = $mid.$old_message->{timestamp_start};
-					$messages{$old_message_new_id} = $old_message;
-					delete($messages{$mid});
-				}
 				$messages{$mid}->{timestamp_start} = get_epoch_from_line($line, $date_elements, $date_format);
 				$messages{$mid}->{queue_id} = $mid;
 				$messages{$mid}->{id} = $mid;
-				$messages{$mid}->{remote_hostname} = $3;
-				$messages{$mid}->{remote_host} = $4;
+				$messages{$mid}->{remote_hostname} = $1;
+				$messages{$mid}->{remote_host} = $2;
 				if($line =~ m#sasl_username=(\S+)#){
 					$messages{$mid}->{auth_username} = $1;
 				}
@@ -253,7 +264,7 @@ sub postfix_parse_log{
 			}else{
 				print STDERR "Failed to parse client info out of line $.";
 			}
-		}elsif($daemon eq 'cleanup' and $logged =~ m#warning: header (\S+): (.+) from (\S+); from=+#){
+		}elsif($daemon eq 'cleanup' and $logged =~ m#(info|warning): header (\S+): (.+) from (\S+); from=+#){
 			if($1 =~ m/^subject$/i){
 				$messages{$mid}->{subject} = $2;
 			}else{
@@ -297,7 +308,6 @@ sub postfix_parse_log{
 				}
 			}
 		}
-
 	}
 	return (\@log_data);
 }
